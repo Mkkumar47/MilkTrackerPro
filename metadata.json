@@ -1,0 +1,6 @@
+{
+  "name": "MilkTrack Pro",
+  "description": "Daily milk manager & expense tracker with statistics, leave calendar, and backup support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
