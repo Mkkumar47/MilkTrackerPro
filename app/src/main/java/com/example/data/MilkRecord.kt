@@ -9,7 +9,10 @@ data class MilkRecord(
     val taken: Boolean,
     val quantity: Double, // in Litres
     val rate: Double, // cost per Litre
-    val notes: String = ""
+    val notes: String = "",
+    val session: String = "Morning", // "Morning", "Evening"
+    val sellerName: String = "",
+    val milkType: String = "Cow Milk" // "Cow Milk", "Buffalo Milk"
 ) {
     val totalExpense: Double
         get() = if (taken) quantity * rate else 0.0

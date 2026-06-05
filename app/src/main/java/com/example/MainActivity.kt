@@ -15,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -25,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import com.example.ui.screens.CalendarScreen
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.LedgerScreen
+import com.example.ui.screens.PaymentScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.viewmodel.MilkViewModel
@@ -44,14 +46,18 @@ class MainActivity : ComponentActivity() {
                 else -> androidx.compose.foundation.isSystemInDarkTheme()
             }
             MyApplicationTheme(darkTheme = darkTheme) {
-                MainContent(viewModel = viewModel)
+                if (configState.isGoogleSignedIn) {
+                    MainContent(viewModel = viewModel)
+                } else {
+                    com.example.ui.screens.GoogleSignInScreen(viewModel = viewModel)
+                }
             }
         }
     }
 }
 
 enum class NavigationTab {
-    DASHBOARD, CALENDAR, LEDGER, SETTINGS
+    DASHBOARD, CALENDAR, PAYMENTS, LEDGER, SETTINGS
 }
 
 @Composable
@@ -92,6 +98,14 @@ fun MainContent(viewModel: MilkViewModel) {
                 )
 
                 NavigationBarItem(
+                    selected = currentTab == NavigationTab.PAYMENTS,
+                    onClick = { currentTab = NavigationTab.PAYMENTS },
+                    icon = { Icon(Icons.Filled.Payments, contentDescription = "Payments") },
+                    label = { Text("Payments") },
+                    modifier = Modifier.testTag("nav_payments")
+                )
+
+                NavigationBarItem(
                     selected = currentTab == NavigationTab.LEDGER,
                     onClick = { currentTab = NavigationTab.LEDGER },
                     icon = { Icon(Icons.Filled.History, contentDescription = "Ledger") },
@@ -111,6 +125,10 @@ fun MainContent(viewModel: MilkViewModel) {
     ) { innerPadding ->
         when (currentTab) {
             NavigationTab.DASHBOARD -> DashboardScreen(
+                viewModel = viewModel,
+                modifier = Modifier.padding(innerPadding)
+            )
+            NavigationTab.PAYMENTS -> PaymentScreen(
                 viewModel = viewModel,
                 modifier = Modifier.padding(innerPadding)
             )

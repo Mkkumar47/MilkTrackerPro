@@ -33,6 +33,8 @@ class MilkViewModel(application: Application) : AndroidViewModel(application) {
 
     val recordsFlow: StateFlow<List<MilkRecord>>
     val configFlow: StateFlow<MilkConfig>
+    val sellersFlow: StateFlow<List<com.example.data.Seller>>
+    val paymentsFlow: StateFlow<List<com.example.data.Payment>>
 
     // UI Feedback
     private val _toastMessage = MutableSharedFlow<String>()
@@ -54,6 +56,18 @@ class MilkViewModel(application: Application) : AndroidViewModel(application) {
             initialValue = MilkConfig()
         )
 
+        sellersFlow = repository.allSellers.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
+        paymentsFlow = repository.allPayments.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
         // Seed dummy records if database is empty
         viewModelScope.launch {
             repository.allRecords.first().let { currentList ->
@@ -61,27 +75,86 @@ class MilkViewModel(application: Application) : AndroidViewModel(application) {
                     seedSampleRecords()
                 }
             }
-            // Sync Alarm system matching settings
-            val cfg = repository.getConfig()
-            if (cfg.dailyReminderEnabled || cfg.paymentReminderEnabled) {
-                AlarmReceiver.scheduleReminders(application)
+            repository.allSellers.first().let { currentSellers ->
+                if (currentSellers.isEmpty()) {
+                    seedSellersAndPayments()
+                }
             }
+            // Sync Alarm system matching settings
+            AlarmReceiver.scheduleReminders(application)
         }
     }
 
     // Records management
-    fun saveRecord(date: String, taken: Boolean, quantity: Double, rate: Double, notes: String) {
+    fun saveRecord(
+        date: String,
+        taken: Boolean,
+        quantity: Double,
+        rate: Double,
+        notes: String,
+        session: String = "Morning",
+        sellerName: String = "",
+        milkType: String = "Cow Milk"
+    ) {
         viewModelScope.launch {
             val rec = MilkRecord(
                 date = date,
                 taken = taken,
                 quantity = quantity,
                 rate = rate,
-                notes = notes
+                notes = notes,
+                session = session,
+                sellerName = sellerName,
+                milkType = milkType
             )
             repository.insertRecord(rec)
             updateWidgets()
             _toastMessage.emit("Record for $date saved!")
+        }
+    }
+
+    fun saveRecordRange(
+        startDate: String,
+        endDate: String,
+        taken: Boolean,
+        quantity: Double,
+        rate: Double,
+        notes: String,
+        session: String = "Morning",
+        sellerName: String = "",
+        milkType: String = "Cow Milk"
+    ) {
+        viewModelScope.launch {
+            val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+            try {
+                val start = sdf.parse(startDate) ?: Date()
+                val end = sdf.parse(endDate) ?: Date()
+                
+                val cal = Calendar.getInstance()
+                cal.time = start
+                
+                var count = 0
+                while (!cal.time.after(end)) {
+                    val dateStr = sdf.format(cal.time)
+                    val rec = MilkRecord(
+                        date = dateStr,
+                        taken = taken,
+                        quantity = quantity,
+                        rate = rate,
+                        notes = notes,
+                        session = session,
+                        sellerName = sellerName,
+                        milkType = milkType
+                    )
+                    repository.insertRecord(rec)
+                    cal.add(Calendar.DAY_OF_YEAR, 1)
+                    count++
+                }
+                updateWidgets()
+                _toastMessage.emit("Saved $count record(s) from $startDate to $endDate!")
+            } catch (e: Exception) {
+                _toastMessage.emit("Failed to save date range: ${e.message}")
+            }
         }
     }
 
@@ -109,18 +182,26 @@ class MilkViewModel(application: Application) : AndroidViewModel(application) {
         payNotify: Boolean,
         themePref: String = "SYSTEM",
         payDay: Int = 1,
-        payDaysBefore: Int = 1
+        payDaysBefore: Int = 1,
+        currencyCode: String = "USD",
+        currencySymbol: String = "$",
+        dailyHour: Int? = null,
+        dailyMinute: Int? = null
     ) {
         viewModelScope.launch {
-            val newCfg = MilkConfig(
-                id = 1,
+            val current = repository.getConfig()
+            val newCfg = current.copy(
                 defaultQuantity = defaultQty,
                 defaultRate = defaultRate,
                 dailyReminderEnabled = dailyNotify,
                 paymentReminderEnabled = payNotify,
                 themePreference = themePref,
                 paymentReminderDay = payDay,
-                paymentReminderDaysBefore = payDaysBefore
+                paymentReminderDaysBefore = payDaysBefore,
+                currencyCode = currencyCode,
+                currencySymbol = currencySymbol,
+                dailyReminderHour = dailyHour ?: current.dailyReminderHour,
+                dailyReminderMinute = dailyMinute ?: current.dailyReminderMinute
             )
             repository.saveConfig(newCfg)
             
@@ -135,6 +216,24 @@ class MilkViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun updateGoogleSignIn(name: String?, email: String?, photoUrl: String?, signedIn: Boolean) {
+        viewModelScope.launch {
+            val current = repository.getConfig()
+            val updated = current.copy(
+                googleUserName = name,
+                googleEmail = email,
+                googlePhotoUrl = photoUrl,
+                isGoogleSignedIn = signedIn
+            )
+            repository.saveConfig(updated)
+            if (signedIn) {
+                _toastMessage.emit("Welcome, $name!")
+            } else {
+                _toastMessage.emit("Signed out successfully.")
+            }
+        }
+    }
+
     fun clearAllUserData() {
         viewModelScope.launch {
             repository.clearAllData()
@@ -144,17 +243,19 @@ class MilkViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // File actions
-    fun exportCsvReport(context: Context): File? {
+    fun exportCsvReport(context: Context, sellerFilter: String = "ALL"): File? {
         val records = recordsFlow.value.filter { it.date.startsWith(_selectedMonth.value) }
-        val file = ReportUtils.exportToCsv(context, _selectedMonth.value, records)
+            .filter { if (sellerFilter == "ALL") true else it.sellerName.equals(sellerFilter, ignoreCase = true) }
+        val file = ReportUtils.exportToCsv(context, _selectedMonth.value, records, configFlow.value.currencySymbol)
         if (file == null) {
             viewModelScope.launch { _toastMessage.emit("Failed to generate CSV report.") }
         }
         return file
     }
 
-    fun exportPdfReport(context: Context, totalLitres: Double, totalExpense: Double, milkDays: Int, leaveDays: Int): File? {
+    fun exportPdfReport(context: Context, totalLitres: Double, totalExpense: Double, milkDays: Int, leaveDays: Int, sellerFilter: String = "ALL"): File? {
         val records = recordsFlow.value.filter { it.date.startsWith(_selectedMonth.value) }
+            .filter { if (sellerFilter == "ALL") true else it.sellerName.equals(sellerFilter, ignoreCase = true) }
         val file = ReportUtils.exportToPdf(
             context = context,
             monthLabel = _selectedMonth.value,
@@ -162,7 +263,8 @@ class MilkViewModel(application: Application) : AndroidViewModel(application) {
             totalLitres = totalLitres,
             totalExpense = totalExpense,
             milkDaysCount = milkDays,
-            leaveDaysCount = leaveDays
+            leaveDaysCount = leaveDays,
+            currencySymbol = configFlow.value.currencySymbol
         )
         if (file == null) {
             viewModelScope.launch { _toastMessage.emit("Failed to generate PDF report.") }
@@ -197,48 +299,185 @@ class MilkViewModel(application: Application) : AndroidViewModel(application) {
     // Seed dummy data
     private suspend fun seedSampleRecords() {
         val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-        val cal = Calendar.getInstance()
         
-        // Let's seed past 3 months (90 days)
-        val random = Random()
-        val defaultRate = 45.0
-        val defaultQty = 1.0
-
-        for (i in 0..90) {
-            cal.time = Date()
-            cal.add(Calendar.DAY_OF_YEAR, -i)
+        // Period A: Jan 1, 2026 to Apr 30, 2026
+        val cal = Calendar.getInstance(TimeZone.getTimeZone("UTC"))
+        cal.set(2026, Calendar.JANUARY, 1, 12, 0, 0)
+        
+        val endApril = Calendar.getInstance(TimeZone.getTimeZone("UTC"))
+        endApril.set(2026, Calendar.APRIL, 30, 12, 0, 0)
+        
+        while (!cal.after(endApril)) {
             val dateStr = sdf.format(cal.time)
-            
-            // Random taken, mostly YES (85% probability)
-            val taken = random.nextDouble() < 0.85
-            val quantity = if (taken) {
-                // Alternates between 1.0, 1.5, and 0.5 occasionally
-                val selection = random.nextInt(4)
-                when (selection) {
-                    0 -> 1.5
-                    1 -> 0.5
-                    else -> defaultQty
-                }
-            } else 0.0
-
-            val notes = if (!taken) {
-                val selection = random.nextInt(3)
-                when (selection) {
-                    0 -> "Out of town"
-                    1 -> "Leftover milk inside fridge"
-                    else -> "Vendor didn't deliver"
-                }
-            } else ""
-
             repository.insertRecord(
                 MilkRecord(
                     date = dateStr,
-                    taken = taken,
-                    quantity = if (taken) quantity else 1.0, // Quantity tracked even on leave
-                    rate = defaultRate,
-                    notes = notes
+                    taken = true,
+                    quantity = 1.0,
+                    rate = 80.0,
+                    notes = ""
                 )
             )
+            cal.add(Calendar.DAY_OF_YEAR, 1)
+        }
+        
+        // Period B: May 1, 2026 to May 31, 2026
+        cal.set(2026, Calendar.MAY, 1, 12, 0, 0)
+        val endMay = Calendar.getInstance(TimeZone.getTimeZone("UTC"))
+        endMay.set(2026, Calendar.MAY, 31, 12, 0, 0)
+        
+        while (!cal.after(endMay)) {
+            val dateStr = sdf.format(cal.time)
+            repository.insertRecord(
+                MilkRecord(
+                    date = dateStr,
+                    taken = true,
+                    quantity = 1.0,
+                    rate = 90.0,
+                    notes = ""
+                )
+            )
+            cal.add(Calendar.DAY_OF_YEAR, 1)
+        }
+    }
+
+    private suspend fun seedSellersAndPayments() {
+        val s1Id = repository.insertSeller(com.example.data.Seller(name = "Mother Dairy", phone = "+1234567890"))
+        val s2Id = repository.insertSeller(com.example.data.Seller(name = "Amul Dairy Services", phone = "+1987654321"))
+        val s3Id = repository.insertSeller(com.example.data.Seller(name = "Heritage Milk Vendor", phone = "+1555123456"))
+
+        // Add some sample payments
+        repository.insertPayment(
+            com.example.data.Payment(
+                date = "2026-04-15",
+                sellerId = s1Id.toInt(),
+                sellerName = "Mother Dairy",
+                amount = 1200.00,
+                paymentMode = "UPI",
+                notes = "Advance payment for April deliver",
+                session = "Morning",
+                milkType = "Cow Milk"
+            )
+        )
+        repository.insertPayment(
+            com.example.data.Payment(
+                date = "2026-04-28",
+                sellerId = s2Id.toInt(),
+                sellerName = "Amul Dairy Services",
+                amount = 800.00,
+                paymentMode = "Cash",
+                notes = "Paid to delivery boy",
+                session = "Evening",
+                milkType = "Buffalo Milk"
+            )
+        )
+        repository.insertPayment(
+            com.example.data.Payment(
+                date = "2026-05-10",
+                sellerId = s3Id.toInt(),
+                sellerName = "Heritage Milk Vendor",
+                amount = 1500.00,
+                paymentMode = "Bank",
+                notes = "Online Bank Transfer",
+                session = "Morning",
+                milkType = "Cow Milk"
+            )
+        )
+        repository.insertPayment(
+            com.example.data.Payment(
+                date = "2026-05-25",
+                sellerId = s1Id.toInt(),
+                sellerName = "Mother Dairy",
+                amount = 250.00,
+                paymentMode = "Other",
+                notes = "Settled pending balance",
+                session = "All Sessions",
+                milkType = "All Milk Types"
+            )
+        )
+    }
+
+    // Seller Actions
+    fun saveSeller(
+        id: Int = 0,
+        name: String,
+        phone: String = "",
+        address: String = "",
+        milkType: String = "Both",
+        cowRate: Double = 0.0,
+        buffaloRate: Double = 0.0,
+        onSuccess: (Long) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            if (name.isBlank()) {
+                _toastMessage.emit("Seller name cannot be empty.")
+                return@launch
+            }
+            val seller = com.example.data.Seller(
+                id = id,
+                name = name.trim(),
+                phone = phone.trim(),
+                address = address.trim(),
+                milkType = milkType,
+                cowRate = cowRate,
+                buffaloRate = buffaloRate
+            )
+            val newId = repository.insertSeller(seller)
+            _toastMessage.emit("Seller '${seller.name}' saved!")
+            onSuccess(newId)
+        }
+    }
+
+    fun deleteSeller(seller: com.example.data.Seller) {
+        viewModelScope.launch {
+            repository.deleteSeller(seller)
+            _toastMessage.emit("Seller '${seller.name}' deleted")
+        }
+    }
+
+    // Payment Actions
+    fun savePayment(
+        date: String,
+        sellerId: Int,
+        sellerName: String,
+        amount: Double,
+        paymentMode: String,
+        notes: String,
+        session: String = "All Sessions",
+        milkType: String = "All Milk Types"
+    ) {
+        viewModelScope.launch {
+            val payment = com.example.data.Payment(
+                date = date,
+                sellerId = sellerId,
+                sellerName = sellerName,
+                amount = amount,
+                paymentMode = paymentMode,
+                notes = notes,
+                session = session,
+                milkType = milkType
+            )
+            repository.insertPayment(payment)
+            _toastMessage.emit("Payment of ${configFlow.value.currencySymbol}$amount saved!")
+        }
+    }
+
+    fun deletePayment(id: Int) {
+        viewModelScope.launch {
+            repository.deletePaymentById(id)
+            _toastMessage.emit("Payment deleted")
+        }
+    }
+
+    fun populateStandard2026Data() {
+        viewModelScope.launch {
+            repository.deleteAllRecords()
+            repository.deleteAllSellers()
+            repository.deleteAllPayments()
+            seedSampleRecords()
+            seedSellersAndPayments()
+            updateWidgets()
+            _toastMessage.emit("Database populated with standard 2026 records successfully!")
         }
     }
 

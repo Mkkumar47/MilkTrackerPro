@@ -1,7 +1,12 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -40,6 +45,7 @@ fun LedgerScreen(
 
     var searchQuery by remember { mutableStateOf("") }
     var statusFilter by remember { mutableStateOf("ALL") } // ALL, YES, NO
+    var sellerFilter by remember { mutableStateOf("ALL") }
 
     var showEditDialog by remember { mutableStateOf(false) }
     var dialogDate by remember { mutableStateOf("") }
@@ -48,13 +54,42 @@ fun LedgerScreen(
     var dialogRate by remember { mutableStateOf("40.0") }
     var dialogNotes by remember { mutableStateOf("") }
 
+    var entryType by remember { mutableStateOf("Single") }
+    var dialogEndDate by remember { mutableStateOf("") }
+    var dialogSession by remember { mutableStateOf("Morning") }
+    var dialogSellerName by remember { mutableStateOf("") }
+    var dialogMilkType by remember { mutableStateOf("Cow Milk") }
+
+    val sellers by viewModel.sellersFlow.collectAsState()
+    var sellerExpanded by remember { mutableStateOf(false) }
+
+    var showAddSellerDialog by remember { mutableStateOf(false) }
+    var newSellerName by remember { mutableStateOf("") }
+    var newSellerPhone by remember { mutableStateOf("") }
+
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    LaunchedEffect(dialogSellerName, dialogMilkType) {
+        val activeSeller = sellers.find { it.name == dialogSellerName }
+        if (activeSeller != null) {
+            val matchingRate = if (dialogMilkType == "Cow Milk") activeSeller.cowRate else activeSeller.buffaloRate
+            if (matchingRate > 0.0) {
+                dialogRate = matchingRate.toString()
+            }
+        }
+    }
+
     // Filter list matches current selected month
-    val pageRecords = remember(records, selectedMonth, searchQuery, statusFilter) {
+    val pageRecords = remember(records, selectedMonth, searchQuery, statusFilter, sellerFilter) {
         records.filter { it.date.startsWith(selectedMonth) }
             .filter { rec ->
                 if (statusFilter == "YES") rec.taken
                 else if (statusFilter == "NO") !rec.taken
                 else true
+            }
+            .filter { rec ->
+                if (sellerFilter == "ALL") true
+                else rec.sellerName.equals(sellerFilter, ignoreCase = true)
             }
             .filter { rec ->
                 rec.notes.contains(searchQuery, ignoreCase = true) || rec.date.contains(searchQuery)
@@ -159,6 +194,37 @@ fun LedgerScreen(
                 )
             }
 
+            // Vendor Filtering Chips Row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Vendor Filter:",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(end = 4.dp)
+                )
+                FilterChip(
+                    selected = sellerFilter == "ALL",
+                    onClick = { sellerFilter = "ALL" },
+                    label = { Text("All") },
+                    shape = RoundedCornerShape(8.dp)
+                )
+                sellers.forEach { seller ->
+                    FilterChip(
+                        selected = sellerFilter == seller.name,
+                        onClick = { sellerFilter = seller.name },
+                        label = { Text(seller.name) },
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                }
+            }
+
             // Records List View
             if (pageRecords.isEmpty()) {
                 Box(
@@ -201,12 +267,18 @@ fun LedgerScreen(
                             record = item,
                             onClick = {
                                 dialogDate = item.date
+                                dialogEndDate = item.date
+                                entryType = "Single"
                                 dialogTaken = item.taken
                                 dialogQty = item.quantity.toString()
                                 dialogRate = item.rate.toString()
                                 dialogNotes = item.notes
+                                dialogSession = item.session
+                                dialogSellerName = item.sellerName
+                                dialogMilkType = item.milkType
                                 showEditDialog = true
-                            }
+                            },
+                            currencySymbol = config.currencySymbol
                         )
                     }
                 }
@@ -217,10 +289,15 @@ fun LedgerScreen(
         FloatingActionButton(
             onClick = {
                 dialogDate = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+                dialogEndDate = dialogDate
+                entryType = "Single"
                 dialogTaken = true
                 dialogQty = config.defaultQuantity.toString()
                 dialogRate = config.defaultRate.toString()
                 dialogNotes = ""
+                dialogSession = "Morning"
+                dialogSellerName = sellers.firstOrNull()?.name ?: ""
+                dialogMilkType = "Cow Milk"
                 showEditDialog = true
             },
             modifier = Modifier
@@ -234,13 +311,74 @@ fun LedgerScreen(
         }
     }
 
+    if (showAddSellerDialog) {
+        AlertDialog(
+            onDismissRequest = { 
+                showAddSellerDialog = false 
+                newSellerName = ""
+                newSellerPhone = ""
+            },
+            title = {
+                Text("Add New Seller", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    OutlinedTextField(
+                        value = newSellerName,
+                        onValueChange = { newSellerName = it },
+                        label = { Text("Seller Name") },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    OutlinedTextField(
+                        value = newSellerPhone,
+                        onValueChange = { newSellerPhone = it },
+                        label = { Text("Phone Number (Optional)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (newSellerName.isNotBlank()) {
+                            viewModel.saveSeller(
+                                name = newSellerName,
+                                phone = newSellerPhone,
+                                cowRate = dialogRate.toDoubleOrNull() ?: 40.0,
+                                buffaloRate = dialogRate.toDoubleOrNull() ?: 40.0,
+                                onSuccess = { generatedId ->
+                                    dialogSellerName = newSellerName.trim()
+                                }
+                            )
+                            showAddSellerDialog = false
+                        }
+                    },
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("Add", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddSellerDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     // Modal Edit/Creation Dialog
     if (showEditDialog) {
         AlertDialog(
             onDismissRequest = { showEditDialog = false },
             title = {
                 Text(
-                    text = "Save Entry Details",
+                    text = if (entryType == "Range") "Add Milk Entry (Range)" else "Add Milk Entry",
                     fontWeight = FontWeight.ExtraBold,
                     fontSize = 18.sp,
                     color = MaterialTheme.colorScheme.primary
@@ -249,25 +387,323 @@ fun LedgerScreen(
             text = {
                 Column(
                     verticalArrangement = Arrangement.spacedBy(14.dp),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 450.dp)
+                        .verticalScroll(rememberScrollState())
                 ) {
-                    // Date field in Dialog can be customized
+                    // ENTRY TYPE: Single vs. Range
                     Column {
-                        Text("Delivery Date", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(modifier = Modifier.height(4.dp))
-                        OutlinedTextField(
-                            value = dialogDate,
-                            onValueChange = { dialogDate = it },
-                            placeholder = { Text("yyyy-MM-dd") },
-                            leadingIcon = { Icon(Icons.Filled.EditCalendar, contentDescription = null) },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(10.dp)
+                        Text(
+                            text = "Entry Type",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.clickable { entryType = "Single" }
+                            ) {
+                                RadioButton(
+                                    selected = (entryType == "Single"),
+                                    onClick = { entryType = "Single" }
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Single Entry", fontSize = 14.sp)
+                            }
+                            
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.clickable { entryType = "Range" }
+                            ) {
+                                RadioButton(
+                                    selected = (entryType == "Range"),
+                                    onClick = { entryType = "Range" }
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Date Range", fontSize = 14.sp)
+                            }
+                        }
                     }
 
-                    // Toggles YES/NO
+                    // DATE / RANGE DISPLAY & PICKER
+                    if (entryType == "Single") {
+                        Column {
+                            Text(
+                                text = "Delivery Date",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        showDatePicker(dialogDate, context) { selectedDate ->
+                                            dialogDate = selectedDate
+                                        }
+                                    }
+                            ) {
+                                OutlinedTextField(
+                                    value = formatToDisplayDate(dialogDate),
+                                    onValueChange = {},
+                                    readOnly = true,
+                                    enabled = false,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    trailingIcon = {
+                                        Icon(Icons.Filled.EditCalendar, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                    },
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                                        disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                                        disabledTrailingIconColor = MaterialTheme.colorScheme.primary,
+                                        disabledContainerColor = MaterialTheme.colorScheme.surface
+                                    ),
+                                    shape = RoundedCornerShape(12.dp)
+                                )
+                            }
+                        }
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "From Date",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            showDatePicker(dialogDate, context) { selectedDate ->
+                                                dialogDate = selectedDate
+                                            }
+                                        }
+                                ) {
+                                    OutlinedTextField(
+                                        value = formatToDisplayDate(dialogDate),
+                                        onValueChange = {},
+                                        readOnly = true,
+                                        enabled = false,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        trailingIcon = {
+                                            Icon(Icons.Filled.EditCalendar, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                        },
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                                            disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                                            disabledTrailingIconColor = MaterialTheme.colorScheme.primary,
+                                            disabledContainerColor = MaterialTheme.colorScheme.surface
+                                        ),
+                                        shape = RoundedCornerShape(12.dp)
+                                    )
+                                }
+                            }
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "To Date",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            showDatePicker(dialogEndDate, context) { selectedDate ->
+                                                dialogEndDate = selectedDate
+                                            }
+                                        }
+                                ) {
+                                    OutlinedTextField(
+                                        value = formatToDisplayDate(dialogEndDate),
+                                        onValueChange = {},
+                                        readOnly = true,
+                                        enabled = false,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        trailingIcon = {
+                                            Icon(Icons.Filled.EditCalendar, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                        },
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                                            disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                                            disabledTrailingIconColor = MaterialTheme.colorScheme.primary,
+                                            disabledContainerColor = MaterialTheme.colorScheme.surface
+                                        ),
+                                        shape = RoundedCornerShape(12.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // SESSION: Morning vs. Evening
                     Column {
-                        Text("Milk Received?", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            text = "Session",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.clickable { dialogSession = "Morning" }
+                            ) {
+                                RadioButton(
+                                    selected = (dialogSession == "Morning"),
+                                    onClick = { dialogSession = "Morning" }
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Morning", fontSize = 14.sp)
+                            }
+                            
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.clickable { dialogSession = "Evening" }
+                            ) {
+                                RadioButton(
+                                    selected = (dialogSession == "Evening"),
+                                    onClick = { dialogSession = "Evening" }
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Evening", fontSize = 14.sp)
+                            }
+                        }
+                    }
+
+                    // SELLER DROPDOWN & ADD BUTTON
+                    Column {
+                        Text(
+                            text = "Seller",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            OutlinedTextField(
+                                value = dialogSellerName,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Select Seller") },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp),
+                                trailingIcon = {
+                                    IconButton(onClick = { sellerExpanded = true }) {
+                                        Icon(Icons.Filled.ArrowDropDown, contentDescription = null)
+                                    }
+                                },
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                    unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                                )
+                            )
+                            DropdownMenu(
+                                expanded = sellerExpanded,
+                                onDismissRequest = { sellerExpanded = false },
+                                modifier = Modifier.fillMaxWidth(0.85f)
+                            ) {
+                                if (sellers.isEmpty()) {
+                                    DropdownMenuItem(
+                                        text = { Text("No Sellers. Click 'Add New Seller' below!") },
+                                        onClick = { sellerExpanded = false }
+                                    )
+                                } else {
+                                    sellers.forEach { seller ->
+                                        DropdownMenuItem(
+                                            text = { Text(seller.name) },
+                                            onClick = {
+                                                dialogSellerName = seller.name
+                                                sellerExpanded = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        
+                        Spacer(modifier = Modifier.height(10.dp))
+                        
+                        OutlinedButton(
+                            onClick = { showAddSellerDialog = true },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
+                        ) {
+                            Text(text = "Add New Seller", fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    // MILK TYPE: Cow Milk vs. Buffalo Milk
+                    Column {
+                        Text(
+                            text = "Milk Type",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.clickable { dialogMilkType = "Cow Milk" }
+                            ) {
+                                RadioButton(
+                                    selected = (dialogMilkType == "Cow Milk"),
+                                    onClick = { dialogMilkType = "Cow Milk" }
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Cow Milk", fontSize = 14.sp)
+                            }
+                            
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.clickable { dialogMilkType = "Buffalo Milk" }
+                            ) {
+                                RadioButton(
+                                    selected = (dialogMilkType == "Buffalo Milk"),
+                                    onClick = { dialogMilkType = "Buffalo Milk" }
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Buffalo Milk", fontSize = 14.sp)
+                            }
+                        }
+                    }
+
+                    // YES / NO Slider Switch Buttons (MILK RECEIVED vs ON LEAVE)
+                    Column {
+                        Text(
+                            text = "Status",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                         Spacer(modifier = Modifier.height(6.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -276,109 +712,192 @@ fun LedgerScreen(
                             Button(
                                 onClick = { dialogTaken = true },
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (dialogTaken) ColorYes else ColorYes.copy(alpha = 0.2f),
+                                    containerColor = if (dialogTaken) ColorYes else ColorYes.copy(alpha = 0.15f),
                                     contentColor = if (dialogTaken) Color.White else ColorYes
                                 ),
                                 modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(12.dp)
+                                shape = RoundedCornerShape(12.dp),
+                                border = if (!dialogTaken) BorderStroke(1.dp, ColorYes.copy(alpha = 0.6f)) else null
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
                                     Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("YES", fontWeight = FontWeight.Bold)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("DELIVERED", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                 }
                             }
 
                             Button(
                                 onClick = { dialogTaken = false },
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (!dialogTaken) ColorNo else ColorNo.copy(alpha = 0.2f),
+                                    containerColor = if (!dialogTaken) ColorNo else ColorNo.copy(alpha = 0.15f),
                                     contentColor = if (!dialogTaken) Color.White else ColorNo
                                 ),
                                 modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(12.dp)
+                                shape = RoundedCornerShape(12.dp),
+                                border = if (dialogTaken) BorderStroke(1.dp, ColorNo.copy(alpha = 0.6f)) else null
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
                                     Icon(Icons.Filled.Close, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("NO", fontWeight = FontWeight.Bold)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("ON LEAVE", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                 }
                             }
                         }
                     }
 
                     if (dialogTaken) {
-                        // Litres input with quick incremental counters
+                        // Quick Add (Liters)
                         Column {
-                            Text("Quantity (Litres)", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Quick Add (Liters):",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
                             Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Button(
-                                    onClick = {
-                                        val cur = dialogQty.toDoubleOrNull() ?: 1.0
-                                        if (cur > 0.5) dialogQty = String.format(Locale.US, "%.1f", cur - 0.5)
-                                    },
-                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer),
-                                    shape = CircleShape,
-                                    modifier = Modifier.size(36.dp),
-                                    contentPadding = PaddingValues(0.dp)
-                                ) {
-                                    Text("-", fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                                }
-
-                                OutlinedTextField(
-                                    value = dialogQty,
-                                    onValueChange = { dialogQty = it },
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                                    textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.Center),
-                                    modifier = Modifier.weight(1f),
-                                    shape = RoundedCornerShape(10.dp)
+                                val quickAddOptions = listOf(
+                                    "250 ml" to "0.25",
+                                    "500 ml" to "0.5",
+                                    "750 ml" to "0.75",
+                                    "1 L" to "1.0",
+                                    "1.5 L" to "1.5"
                                 )
-
-                                Button(
-                                    onClick = {
-                                        val cur = dialogQty.toDoubleOrNull() ?: 1.0
-                                        dialogQty = String.format(Locale.US, "%.1f", cur + 0.5)
-                                    },
-                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer),
-                                    shape = CircleShape,
-                                    modifier = Modifier.size(36.dp),
-                                    contentPadding = PaddingValues(0.dp)
-                                ) {
-                                    Text("+", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                                quickAddOptions.forEach { (label, value) ->
+                                    val isSelected = dialogQty == value
+                                    Box(
+                                        modifier = Modifier
+                                            .border(
+                                                width = 1.dp,
+                                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
+                                                shape = RoundedCornerShape(12.dp)
+                                            )
+                                            .background(
+                                                color = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f),
+                                                shape = RoundedCornerShape(12.dp)
+                                            )
+                                            .clickable {
+                                                dialogQty = value
+                                            }
+                                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            fontSize = 14.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
                                 }
                             }
                         }
 
-                        // Rate cost input
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // Quantity (Liters) text field
                         Column {
-                            Text("Rate Cost (Price/L)", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Quantity (Liters)",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            OutlinedTextField(
+                                value = dialogQty,
+                                onValueChange = { dialogQty = it },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                textStyle = LocalTextStyle.current.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp
+                                ),
+                                placeholder = { Text("0.0", color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)) },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                    unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                                )
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // Pricing Field
+                        Column {
+                            Text(
+                                text = "Rate (per Liter)",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
                             OutlinedTextField(
                                 value = dialogRate,
                                 onValueChange = { dialogRate = it },
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                                leadingIcon = { Icon(Icons.Filled.AttachMoney, contentDescription = null) },
+                                leadingIcon = {
+                                    Text(
+                                        text = config.currencySymbol,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.padding(start = 12.dp, end = 2.dp)
+                                    )
+                                },
                                 modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(10.dp)
+                                shape = RoundedCornerShape(12.dp),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                    unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                                )
                             )
                         }
                     }
 
-                    // Comments or Notes
+                    // Leave reason or customizable notes
                     Column {
-                        Text(if (dialogTaken) "Notes" else "Reason for Leave", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = if (dialogTaken) "Notes (Optional)" else "Reason for Leave",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
                         OutlinedTextField(
                             value = dialogNotes,
                             onValueChange = { dialogNotes = it },
-                            placeholder = { Text(if (dialogTaken) "Add notes..." else "e.g. Vacation / Double delivery") },
+                            placeholder = {
+                                Text(
+                                    text = if (dialogTaken) "Add notes..." else "e.g., Off-town / Holiday / Festivity",
+                                    fontSize = 14.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                )
+                            },
                             modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(10.dp)
+                            shape = RoundedCornerShape(12.dp),
+                            maxLines = 3,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                                focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                            )
                         )
                     }
                 }
@@ -388,27 +907,53 @@ fun LedgerScreen(
                     onClick = {
                         val qty = dialogQty.toDoubleOrNull() ?: 1.0
                         val rate = dialogRate.toDoubleOrNull() ?: 40.0
-                        viewModel.saveRecord(dialogDate, dialogTaken, qty, rate, dialogNotes)
+                        if (entryType == "Single") {
+                            viewModel.saveRecord(
+                                date = dialogDate,
+                                taken = dialogTaken,
+                                quantity = qty,
+                                rate = rate,
+                                notes = dialogNotes,
+                                session = dialogSession,
+                                sellerName = dialogSellerName,
+                                milkType = dialogMilkType
+                            )
+                        } else {
+                            viewModel.saveRecordRange(
+                                startDate = dialogDate,
+                                endDate = dialogEndDate,
+                                taken = dialogTaken,
+                                quantity = qty,
+                                rate = rate,
+                                notes = dialogNotes,
+                                session = dialogSession,
+                                sellerName = dialogSellerName,
+                                milkType = dialogMilkType
+                            )
+                        }
                         showEditDialog = false
-                    }
+                    },
+                    shape = RoundedCornerShape(12.dp)
                 ) {
-                    Text("Save")
+                    Text("Add Entry", fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
-                Row {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     TextButton(onClick = { showEditDialog = false }) {
-                        Text("Cancel")
+                        Text("Cancel", fontWeight = FontWeight.Medium)
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    TextButton(
-                        colors = ButtonDefaults.textButtonColors(contentColor = ColorNo),
-                        onClick = {
-                            viewModel.deleteRecord(dialogDate)
-                            showEditDialog = false
+                    if (entryType == "Single") {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        TextButton(
+                            colors = ButtonDefaults.textButtonColors(contentColor = ColorNo),
+                            onClick = {
+                                viewModel.deleteRecord(dialogDate)
+                                showEditDialog = false
+                            }
+                        ) {
+                            Text("Delete", fontWeight = FontWeight.Bold)
                         }
-                    ) {
-                        Text("Delete")
                     }
                 }
             }
@@ -419,7 +964,8 @@ fun LedgerScreen(
 @Composable
 fun LedgerItemRow(
     record: MilkRecord,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    currencySymbol: String = "$"
 ) {
     ElevatedCard(
         modifier = Modifier
@@ -471,7 +1017,7 @@ fun LedgerItemRow(
                 ) {
                     if (record.taken) {
                         Text(
-                            text = "${record.quantity} L @ $${record.rate}/L",
+                            text = "${record.quantity} L @ ${currencySymbol}${record.rate}/L",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -502,7 +1048,7 @@ fun LedgerItemRow(
             if (record.taken) {
                 Column(horizontalAlignment = Alignment.End) {
                     Text(
-                        text = String.format(Locale.US, "$%.2f", record.totalExpense),
+                        text = String.format(Locale.US, "%s%.2f", currencySymbol, record.totalExpense),
                         fontSize = 15.sp,
                         fontWeight = FontWeight.ExtraBold,
                         color = ColorYes
@@ -515,7 +1061,7 @@ fun LedgerItemRow(
                 }
             } else {
                 Text(
-                    text = "$0.00",
+                    text = "${currencySymbol}0.00",
                     fontSize = 14.sp,
                     color = MaterialTheme.colorScheme.outline,
                     fontWeight = FontWeight.Bold
@@ -547,4 +1093,43 @@ private fun selectAdjacentMonth(current: String, offset: Int): String {
     } catch (e: Exception) {
         current
     }
+}
+
+private fun formatToDisplayDate(yyyyMmDd: String): String {
+    return try {
+        val input = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+        val output = SimpleDateFormat("dd/MM/yyyy", Locale.US)
+        val date = input.parse(yyyyMmDd)
+        if (date != null) output.format(date) else yyyyMmDd
+    } catch (e: Exception) {
+        yyyyMmDd
+    }
+}
+
+private fun showDatePicker(
+    currentDateStr: String,
+    context: android.content.Context,
+    onDateSelected: (String) -> Unit
+) {
+    val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+    val calendar = Calendar.getInstance()
+    try {
+        val parsedDate = sdf.parse(currentDateStr)
+        if (parsedDate != null) {
+            calendar.time = parsedDate
+        }
+    } catch (e: Exception) {
+    }
+    
+    val dpd = android.app.DatePickerDialog(
+        context,
+        { _, y, m, d ->
+            val formatted = String.format(Locale.US, "%04d-%02d-%02d", y, m + 1, d)
+            onDateSelected(formatted)
+        },
+        calendar.get(Calendar.YEAR),
+        calendar.get(Calendar.MONTH),
+        calendar.get(Calendar.DAY_OF_MONTH)
+    )
+    dpd.show()
 }

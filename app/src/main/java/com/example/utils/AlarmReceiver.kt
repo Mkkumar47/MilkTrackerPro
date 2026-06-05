@@ -14,6 +14,7 @@ import com.example.data.AppDatabase
 import com.example.data.MilkConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -49,7 +50,19 @@ class AlarmReceiver : BroadcastReceiver() {
         if (type == "monthly") {
             if (config.paymentReminderEnabled) {
                 if (isApproachingPaymentDate(Calendar.getInstance(), config)) {
-                    showNotification(context, "monthly", config)
+                    val currentMonthStr = SimpleDateFormat("yyyy-MM", Locale.US).format(Date())
+                    val records = db.milkRecordDao.getAllRecords().first()
+                    val payments = db.paymentDao.getAllPayments().first()
+
+                    val monthlyRecords = records.filter { it.date.startsWith(currentMonthStr) }
+                    val takenOnly = monthlyRecords.filter { it.taken }
+                    val totalExpense = takenOnly.sumOf { it.quantity * it.rate }
+
+                    val monthlyPayments = payments.filter { it.date.startsWith(currentMonthStr) }
+                    val totalPaid = monthlyPayments.sumOf { it.amount }
+
+                    val amountDue = totalExpense - totalPaid
+                    showNotification(context, "monthly", config, amountDue)
                 }
             }
         } else if (type == "daily") {
@@ -119,7 +132,7 @@ class AlarmReceiver : BroadcastReceiver() {
         return false
     }
 
-    private fun showNotification(context: Context, type: String, config: MilkConfig) {
+    private fun showNotification(context: Context, type: String, config: MilkConfig, amountDue: Double = 0.0) {
         val channelId = "MILK_TRACK_REMINDERS"
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
@@ -127,7 +140,7 @@ class AlarmReceiver : BroadcastReceiver() {
             val channel = NotificationChannel(
                 channelId,
                 "Reminders",
-                NotificationManager.IMPORTANCE_DEFAULT
+                NotificationManager.IMPORTANCE_HIGH
             ).apply {
                 description = "Daily entry and monthly payment reminders"
             }
@@ -140,7 +153,8 @@ class AlarmReceiver : BroadcastReceiver() {
 
         if (type == "monthly") {
             title = "MilkTrack Pro: Settle Account"
-            text = "Your payment date of Day ${config.paymentReminderDay} is approaching! Settle your milk invoice soon."
+            val numStr = String.format(Locale.US, "%s%.2f", config.currencySymbol, amountDue)
+            text = "Your payment date of Day ${config.paymentReminderDay} is approaching! Outstanding Due: $numStr. Settle your milk invoice soon."
             notificationId = 1001
         } else {
             title = "MilkTrack Pro: Daily Check"
@@ -173,61 +187,76 @@ class AlarmReceiver : BroadcastReceiver() {
         fun scheduleReminders(context: Context) {
             val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
 
-            // Evening Alarm: Daily Log Check at 8:00 PM (20:00)
-            val dailyIntent = Intent(context, AlarmReceiver::class.java).apply {
-                putExtra("type", "daily")
-            }
-            val dailyPendingIntent = PendingIntent.getBroadcast(
-                context,
-                2001,
-                dailyIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
+            CoroutineScope(Dispatchers.IO).launch {
+                val db = AppDatabase.getDatabase(context)
+                val config = db.milkConfigDao.getConfig() ?: MilkConfig()
 
-            val dailyCalendar = Calendar.getInstance().apply {
-                timeInMillis = System.currentTimeMillis()
-                set(Calendar.HOUR_OF_DAY, 20)
-                set(Calendar.MINUTE, 0)
-                set(Calendar.SECOND, 0)
-                if (before(Calendar.getInstance())) {
-                    add(Calendar.DAY_OF_YEAR, 1)
+                // Evening Alarm: Daily Log Check
+                val dailyIntent = Intent(context, AlarmReceiver::class.java).apply {
+                    putExtra("type", "daily")
+                }
+                val dailyPendingIntent = PendingIntent.getBroadcast(
+                    context,
+                    2001,
+                    dailyIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+
+                if (config.dailyReminderEnabled) {
+                    val dailyCalendar = Calendar.getInstance().apply {
+                        timeInMillis = System.currentTimeMillis()
+                        set(Calendar.HOUR_OF_DAY, config.dailyReminderHour)
+                        set(Calendar.MINUTE, config.dailyReminderMinute)
+                        set(Calendar.SECOND, 0)
+                        set(Calendar.MILLISECOND, 0)
+                        if (before(Calendar.getInstance())) {
+                            add(Calendar.DAY_OF_YEAR, 1)
+                        }
+                    }
+
+                    alarmManager.setInexactRepeating(
+                        AlarmManager.RTC_WAKEUP,
+                        dailyCalendar.timeInMillis,
+                        AlarmManager.INTERVAL_DAY,
+                        dailyPendingIntent
+                    )
+                } else {
+                    alarmManager.cancel(dailyPendingIntent)
+                }
+
+                // Morning Alarm: Payment approaches check
+                val monthlyIntent = Intent(context, AlarmReceiver::class.java).apply {
+                    putExtra("type", "monthly")
+                }
+                val monthlyPendingIntent = PendingIntent.getBroadcast(
+                    context,
+                    2002,
+                    monthlyIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+
+                if (config.paymentReminderEnabled) {
+                    val monthlyCalendar = Calendar.getInstance().apply {
+                        timeInMillis = System.currentTimeMillis()
+                        set(Calendar.HOUR_OF_DAY, 9)
+                        set(Calendar.MINUTE, 0)
+                        set(Calendar.SECOND, 0)
+                        set(Calendar.MILLISECOND, 0)
+                        if (before(Calendar.getInstance())) {
+                            add(Calendar.DAY_OF_YEAR, 1)
+                        }
+                    }
+
+                    alarmManager.setInexactRepeating(
+                        AlarmManager.RTC_WAKEUP,
+                        monthlyCalendar.timeInMillis,
+                        AlarmManager.INTERVAL_DAY,
+                        monthlyPendingIntent
+                    )
+                } else {
+                    alarmManager.cancel(monthlyPendingIntent)
                 }
             }
-
-            alarmManager.setInexactRepeating(
-                AlarmManager.RTC_WAKEUP,
-                dailyCalendar.timeInMillis,
-                AlarmManager.INTERVAL_DAY,
-                dailyPendingIntent
-            )
-
-            // Morning Alarm: Payment approaches check at 9:00 AM (09:00)
-            val monthlyIntent = Intent(context, AlarmReceiver::class.java).apply {
-                putExtra("type", "monthly")
-            }
-            val monthlyPendingIntent = PendingIntent.getBroadcast(
-                context,
-                2002,
-                monthlyIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-
-            val monthlyCalendar = Calendar.getInstance().apply {
-                timeInMillis = System.currentTimeMillis()
-                set(Calendar.HOUR_OF_DAY, 9)
-                set(Calendar.MINUTE, 0)
-                set(Calendar.SECOND, 0)
-                if (before(Calendar.getInstance())) {
-                    add(Calendar.DAY_OF_YEAR, 1)
-                }
-            }
-
-            alarmManager.setInexactRepeating(
-                AlarmManager.RTC_WAKEUP,
-                monthlyCalendar.timeInMillis,
-                AlarmManager.INTERVAL_DAY,
-                monthlyPendingIntent
-            )
         }
 
         fun cancelReminders(context: Context) {
@@ -236,18 +265,18 @@ class AlarmReceiver : BroadcastReceiver() {
             val dailyPending = PendingIntent.getBroadcast(
                 context,
                 2001,
-                Intent(context, AlarmReceiver::class.java),
-                PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
+                Intent(context, AlarmReceiver::class.java).apply { putExtra("type", "daily") },
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
-            dailyPending?.let { alarmManager.cancel(it) }
+            alarmManager.cancel(dailyPending)
 
             val monthlyPending = PendingIntent.getBroadcast(
                 context,
                 2002,
-                Intent(context, AlarmReceiver::class.java),
-                PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
+                Intent(context, AlarmReceiver::class.java).apply { putExtra("type", "monthly") },
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
-            monthlyPending?.let { alarmManager.cancel(it) }
+            alarmManager.cancel(monthlyPending)
         }
     }
 }

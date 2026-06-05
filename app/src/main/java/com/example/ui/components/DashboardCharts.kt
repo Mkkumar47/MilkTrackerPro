@@ -26,7 +26,7 @@ import androidx.compose.ui.unit.sp
 import java.util.Locale
 
 // Vibrant UI colors matching beautiful design theme
-val ColorYes = Color(0xFF2E7D32) // Forest Green (from YES button)
+val ColorYes = Color(0xFF67BE6E) // Gentle Leaf Green
 val ColorNo = Color(0xFFE53935)  // Material Red
 val ColorAccent = Color(0xFF006495) // Professional Polish Navy Blue
 val ColorChartGrid = Color(0x339E9E9E)
@@ -250,7 +250,8 @@ fun MonthlyConsumptionBarGraph(
 @Composable
 fun YearlyExpenseTrendChart(
     monthlyExpenseList: List<Pair<String, Double>>, // e.g., ("Jan", 120.0)
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    currencySymbol: String = "$"
 ) {
     val maxExpense = (monthlyExpenseList.maxOfOrNull { it.second } ?: 100.0).coerceAtLeast(100.0)
 
@@ -265,7 +266,7 @@ fun YearlyExpenseTrendChart(
             modifier = Modifier.padding(16.dp)
         ) {
             Text(
-                text = "Yearly Expense Curve ($)",
+                text = "Yearly Expense Curve ($currencySymbol)",
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,

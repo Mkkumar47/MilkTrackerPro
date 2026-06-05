@@ -119,9 +119,10 @@ class MilkWidgetProvider : AppWidgetProvider() {
                     val currentMonth = SimpleDateFormat("yyyy-MM", Locale.US).format(Date())
                     val monthRecords = db.milkRecordDao.getRecordsForMonth(currentMonth).first()
                     val totalExpense = monthRecords.filter { it.taken }.sumOf { it.quantity * it.rate }
+                    val config = db.milkConfigDao.getConfig() ?: MilkConfig()
 
                     views.setTextViewText(R.id.widget_date, prettyDate)
-                    views.setTextViewText(R.id.widget_month_expense, String.format(Locale.US, "$%.2f", totalExpense))
+                    views.setTextViewText(R.id.widget_month_expense, String.format(Locale.US, "%s%.2f", config.currencySymbol, totalExpense))
 
                     if (todayRecord == null) {
                         views.setTextViewText(R.id.widget_today_status, "Today: PENDING (Not Logged)")

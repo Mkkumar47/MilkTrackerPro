@@ -19,12 +19,12 @@ import java.util.Locale
 
 object ReportUtils {
 
-    fun exportToCsv(context: Context, monthLabel: String, list: List<MilkRecord>): File? {
+    fun exportToCsv(context: Context, monthLabel: String, list: List<MilkRecord>, currencySymbol: String = "$"): File? {
         try {
             val fileName = "MilkTrack_Pro_$monthLabel.csv"
             val file = File(context.cacheDir, fileName)
             FileOutputStream(file).use { out ->
-                val header = "Date,Milk Taken,Quantity (Litres),Cost Per Litre,Total Cost ($),Notes\n"
+                val header = "Date,Milk Taken,Quantity (Litres),Cost Per Litre,Total Cost ($currencySymbol),Notes\n"
                 out.write(header.toByteArray())
                 for (rec in list) {
                     val status = if (rec.taken) "YES" else "NO"
@@ -47,7 +47,8 @@ object ReportUtils {
         totalLitres: Double,
         totalExpense: Double,
         milkDaysCount: Int,
-        leaveDaysCount: Int
+        leaveDaysCount: Int,
+        currencySymbol: String = "$"
     ): File? {
         try {
             val pdfDoc = PdfDocument()
@@ -112,7 +113,7 @@ object ReportUtils {
 
             // Draw quick metrics in header container
             canvas.drawText("Total Consumption: ${String.format(Locale.US, "%.2f", totalLitres)} Litres", 40f, 130f, textPaint)
-            canvas.drawText("Total Expense: $${String.format(Locale.US, "%.2f", totalExpense)}", 40f, 150f, textPaint)
+            canvas.drawText("Total Expense: $currencySymbol${String.format(Locale.US, "%.2f", totalExpense)}", 40f, 150f, textPaint)
             canvas.drawText("Delivery Days: $milkDaysCount | Leave Days: $leaveDaysCount", 40f, 170f, textPaint)
 
             // Draw Table Headers
@@ -120,8 +121,8 @@ object ReportUtils {
             canvas.drawText("Date", 40f, currentY, boldTextPaint)
             canvas.drawText("Status", 140f, currentY, boldTextPaint)
             canvas.drawText("Quantity (L)", 220f, currentY, boldTextPaint)
-            canvas.drawText("Price/Unit ($)", 320f, currentY, boldTextPaint)
-            canvas.drawText("Total ($)", 420f, currentY, boldTextPaint)
+            canvas.drawText("Price/Unit ($currencySymbol)", 320f, currentY, boldTextPaint)
+            canvas.drawText("Total ($currencySymbol)", 420f, currentY, boldTextPaint)
             canvas.drawText("Notes", 500f, currentY, boldTextPaint)
 
             canvas.drawLine(25f, currentY + 10f, 570f, currentY + 10f, linePaint)
@@ -141,8 +142,8 @@ object ReportUtils {
                     canvas.drawText("LEAVE", 140f, currentY, redTextPaint)
                 }
                 canvas.drawText(String.format(Locale.US, "%.1f L", rec.quantity), 220f, currentY, textPaint)
-                canvas.drawText(String.format(Locale.US, "$%.2f", rec.rate), 320f, currentY, textPaint)
-                canvas.drawText(String.format(Locale.US, "$%.2f", rec.totalExpense), 420f, currentY, textPaint)
+                canvas.drawText(String.format(Locale.US, "%s%.2f", currencySymbol, rec.rate), 320f, currentY, textPaint)
+                canvas.drawText(String.format(Locale.US, "%s%.2f", currencySymbol, rec.totalExpense), 420f, currentY, textPaint)
                 
                 val shortNote = if (rec.notes.length > 12) rec.notes.take(9) + "..." else rec.notes
                 canvas.drawText(shortNote, 500f, currentY, textPaint)
@@ -168,7 +169,7 @@ object ReportUtils {
 
     fun triggerShare(context: Context, file: File, mimeType: String) {
         try {
-            val uri = FileProvider.getUriForFile(context, "com.aistudio.milktrack.puzqwl.fileprovider", file)
+            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
             val intent = Intent(Intent.ACTION_SEND).apply {
                 type = mimeType
                 putExtra(Intent.EXTRA_STREAM, uri)

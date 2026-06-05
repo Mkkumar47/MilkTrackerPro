@@ -25,4 +25,7 @@ interface MilkRecordDao {
 
     @Query("DELETE FROM milk_records WHERE date = :date")
     suspend fun deleteRecordByDate(date: String)
+
+    @Query("DELETE FROM milk_records")
+    suspend fun deleteAllRecords()
 }

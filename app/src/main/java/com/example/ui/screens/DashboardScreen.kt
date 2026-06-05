@@ -34,6 +34,7 @@ fun DashboardScreen(
     val records by viewModel.recordsFlow.collectAsState()
     val selectedMonth by viewModel.selectedMonth.collectAsState()
     val selectedYear by viewModel.selectedYear.collectAsState()
+    val configState by viewModel.configFlow.collectAsState()
 
     val context = LocalContext.current
     val scrollState = rememberScrollState()
@@ -49,8 +50,8 @@ fun DashboardScreen(
     val averageDaily = if (milkTakenDays.isNotEmpty()) totalLitres / milkTakenDays.size else 0.0
 
     // Month-over-month comparison
-    val comparisonText = remember(selectedMonth, records) {
-        calculateMoMComparison(selectedMonth, records)
+    val comparisonText = remember(selectedMonth, records, configState.currencySymbol) {
+        calculateMoMComparison(selectedMonth, records, configState.currencySymbol)
     }
 
     // Peak month estimation
@@ -101,18 +102,19 @@ fun DashboardScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column {
+                val displayName = configState.googleUserName ?: "User"
                 Text(
-                    text = "Welcome Back",
-                    fontSize = 11.sp,
+                    text = "Welcome, $displayName",
+                    fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    letterSpacing = 1.sp
+                    letterSpacing = 0.5.sp
                 )
                 Text(
                     text = "MilkTrack Pro",
-                    fontSize = 24.sp,
+                    fontSize = 22.sp,
                     fontWeight = FontWeight.Black,
-                    color = MaterialTheme.colorScheme.onBackground
+                    color = MaterialTheme.colorScheme.primary
                 )
             }
             Row(
@@ -132,19 +134,39 @@ fun DashboardScreen(
                         tint = MaterialTheme.colorScheme.onSecondaryContainer
                     )
                 }
+                
+                val initials = remember(configState.googleUserName) {
+                    val rawName = configState.googleUserName
+                    if (rawName.isNullOrBlank()) {
+                        "U"
+                    } else {
+                        val parts = rawName.trim().split("\\s+".toRegex())
+                        if (parts.size >= 2) {
+                            "${parts[0].take(1).uppercase()}${parts[1].take(1).uppercase()}"
+                        } else {
+                            rawName.take(2).uppercase()
+                        }
+                    }
+                }
+                
                 Box(
                     modifier = Modifier
                         .size(40.dp)
-                        .background(Color(0xFFEADDFF), RoundedCornerShape(20.dp))
+                        .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(20.dp))
                         .clickable {
-                            Toast.makeText(context, "Logged in as JD (manikanta.redrouthu47@gmail.com)", Toast.LENGTH_LONG).show()
+                            val accountInfo = if (configState.isGoogleSignedIn) {
+                                "${configState.googleUserName} (${configState.googleEmail})"
+                            } else {
+                                "Guest Mode"
+                            }
+                            Toast.makeText(context, "Logged in as $accountInfo", Toast.LENGTH_LONG).show()
                         },
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "JD",
+                        text = initials,
                         fontWeight = FontWeight.Bold,
-                        color = Color(0xFF21005D),
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
                         fontSize = 14.sp
                     )
                 }
@@ -261,7 +283,7 @@ fun DashboardScreen(
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = String.format(Locale.US, "$%.2f", totalExpense),
+                            text = String.format(Locale.US, "%s%.2f", configState.currencySymbol, totalExpense),
                             fontSize = 32.sp,
                             fontWeight = FontWeight.Black,
                             color = Color.White
@@ -344,7 +366,6 @@ fun DashboardScreen(
             }
 
             // Unit Price Card
-            val configState by viewModel.configFlow.collectAsState()
             Card(
                 modifier = Modifier.weight(1.5f),
                 shape = RoundedCornerShape(20.dp),
@@ -361,7 +382,7 @@ fun DashboardScreen(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = String.format(Locale.US, "$%.2f", configState.defaultRate),
+                        text = String.format(Locale.US, "%s%.2f", configState.currencySymbol, configState.defaultRate),
                         fontSize = 24.sp,
                         fontWeight = FontWeight.ExtraBold,
                         color = MaterialTheme.colorScheme.onSurface
@@ -428,7 +449,7 @@ fun DashboardScreen(
 
         MonthlyConsumptionBarGraph(monthlyLitres = barGraphData)
 
-        YearlyExpenseTrendChart(monthlyExpenseList = expenseTrendData)
+        YearlyExpenseTrendChart(monthlyExpenseList = expenseTrendData, currencySymbol = configState.currencySymbol)
 
         Spacer(modifier = Modifier.height(50.dp))
     }
@@ -470,7 +491,7 @@ fun MetricCard(
 }
 
 // MoM calculator
-private fun calculateMoMComparison(currentMonth: String, allRecords: List<MilkRecord>): String {
+private fun calculateMoMComparison(currentMonth: String, allRecords: List<MilkRecord>, currencySymbol: String): String {
     try {
         val sdf = SimpleDateFormat("yyyy-MM", Locale.US)
         val cal = Calendar.getInstance()
@@ -492,14 +513,14 @@ private fun calculateMoMComparison(currentMonth: String, allRecords: List<MilkRe
         return if (diff >= 0) {
             String.format(
                 Locale.US,
-                "Expenese is ▲ $%.2f (+%.1f%%) higher than last month (%s).",
-                diff, percent, getMonthDisplayName(prevMonth)
+                "Expense is ▲ %s%.2f (+%.1f%%) higher than last month (%s).",
+                currencySymbol, diff, percent, getMonthDisplayName(prevMonth)
             )
         } else {
             String.format(
                 Locale.US,
-                "Expense is ▼ $%.2f (-%.1f%%) lower than last month (%s).",
-                Math.abs(diff), Math.abs(percent), getMonthDisplayName(prevMonth)
+                "Expense is ▼ %s%.2f (-%.1f%%) lower than last month (%s).",
+                currencySymbol, Math.abs(diff), Math.abs(percent), getMonthDisplayName(prevMonth)
             )
         }
     } catch (e: Exception) {
